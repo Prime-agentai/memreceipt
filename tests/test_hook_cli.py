@@ -130,3 +130,20 @@ def test_setup_write_backs_up(tmp_path: Path, capsys: pytest.CaptureFixture[str]
     s = json.loads((cfg / "settings.json").read_text())
     assert s["theme"] == "dark" and "memreceipt" in s["hooks"]["SessionStart"][0]["hooks"][0]["command"]
     assert list(cfg.glob("settings.json.memreceipt-*.bak"))
+
+
+def test_verify_through_symlinked_config_dir(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # macOS: /var -> /private/var. Claude Code records resolved paths; the user may pass the link.
+    root, cfg, store = _setup(tmp_path, 3)
+    link = tmp_path / "cfg-link"
+    link.symlink_to(cfg)
+    idx = str(store / "MEMORY.md")  # real path, as written into the transcript
+    body = (store / "MEMORY.md").read_text(encoding="utf-8")
+    write_session(cfg, root, "s1", [rec_instructions("2026-11-01T00:00:00Z", root, [("AutoMem", idx, body)]),
+                                    rec_tool("2026-11-01T00:01:00Z", "Bash", {"command": f"cat {store}/fact-001.md"})])
+    capsys.readouterr()
+    assert main(["verify", "--cwd", str(root), "--config-dir", str(link), "--json"]) == 0
+    assert [s["verdict"] for s in json.loads(capsys.readouterr().out)["sessions"]] == ["whole"]
+    assert main(["audit", "--cwd", str(root), "--config-dir", str(link), "--json"]) == 0
+    by = {r["file"]: r for r in json.loads(capsys.readouterr().out)["files"]}
+    assert by["fact-001.md"]["read_sessions"] == 1

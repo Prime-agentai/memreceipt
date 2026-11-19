@@ -18,7 +18,7 @@ from .hook import receipt_line
 from .hook import run as run_hook
 from .index import CHAR_LIMIT, LINE_LIMIT, IndexReport, analyze_store, split_lines
 from .store import Resolution, all_stores, project_key, resolve
-from .transcripts import Session, sessions_for
+from .transcripts import Session, same_path, sessions_for
 
 
 def _warn(msg: str) -> None:
@@ -119,7 +119,7 @@ def verdict(sess: Session, store: Path, current_prefix: str) -> tuple[str, str]:
         if sess.instructions_records == 0:
             return "no-record", "no instructions record (older build, --bare, or a non-interactive path)"
         return "not-loaded", "instructions were injected without an auto-memory index (auto-memory off for that run?)"
-    mine = [d for d in sess.deliveries if d.path == index]
+    mine = [d for d in sess.deliveries if same_path(d.path, index)]
     if not mine:
         others = sorted({d.path for d in sess.deliveries})
         return "other-store", "loaded " + ", ".join(_home(o) for o in others)

@@ -16,6 +16,7 @@ Parsing is defensive: unknown shapes are skipped, never fatal.
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections import Counter
 from collections.abc import Iterator
@@ -93,19 +94,27 @@ class Session:
         return {d.path for d in self.deliveries}
 
 
-def _memory_name(path: str, store: str) -> str | None:
+def same_path(a: str, b: str) -> bool:
+    """Equal as written, or equal once symlinks are resolved (macOS /var vs /private/var, a linked ~)."""
+    return a == b or os.path.realpath(a) == os.path.realpath(b)
+
+
+def _memory_name(path: str, stores: tuple[str, ...]) -> str | None:
     p = path.replace("\\", "/")
-    if p.startswith(store + "/"):
-        rest = p[len(store) + 1:]
-        if "/" not in rest and rest.endswith(".md"):
-            return rest
+    for store in stores:
+        if p.startswith(store + "/"):
+            rest = p[len(store) + 1:]
+            if "/" not in rest and rest.endswith(".md"):
+                return rest
     return None
 
 
-def _bash_names(cmd: str, store: str, names: set[str]) -> set[str]:
+def _bash_names(cmd: str, stores: tuple[str, ...], names: set[str]) -> set[str]:
     """Memory files a shell command names, either by full path or by bare name after a cd."""
     hit: set[str] = set()
-    if store in cmd:
+    for store in stores:
+        if store not in cmd:
+            continue
         for m in re.finditer(re.escape(store) + r"/([^\s'\"/;|&)]+\.md)", cmd):
             hit.add(m.group(1))
         if "memory" in cmd:
@@ -128,7 +137,7 @@ def _tool_uses(rec: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:
             yield str(block.get("name", "")), inp if isinstance(inp, dict) else {}
 
 
-def _scan_file(path: Path, sess: Session, store: str, names: set[str], deliveries: bool) -> None:
+def _scan_file(path: Path, sess: Session, store: tuple[str, ...], names: set[str], deliveries: bool) -> None:
     try:
         fh = path.open(encoding="utf-8", errors="replace")
     except OSError:
@@ -178,7 +187,7 @@ def _scan_file(path: Path, sess: Session, store: str, names: set[str], deliverie
 
 def load_session(path: Path, store: Path, names: set[str] | None = None) -> Session:
     """Parse one transcript plus its subagent transcripts (reads only) into a Session."""
-    s = str(store).rstrip("/")
+    s = tuple(dict.fromkeys([str(store).rstrip("/"), os.path.realpath(store)]))
     nm = names or set()
     sess = Session(id=path.stem, file=path)
     _scan_file(path, sess, s, nm, deliveries=True)
@@ -199,11 +208,13 @@ def candidate_dirs(projects: Path, root_key: str, every: bool) -> list[Path]:
 def _under(cwd: str | None, root: Path) -> bool:
     if not cwd:
         return False
-    try:
-        Path(cwd).relative_to(root)
-    except ValueError:
-        return False
-    return True
+    for c, r in ((cwd, str(root)), (os.path.realpath(cwd), os.path.realpath(root))):
+        try:
+            Path(c).relative_to(r)
+            return True
+        except ValueError:
+            continue
+    return False
 
 
 def sessions_for(store: Path, root: Path, projects: Path, root_key: str, every: bool = False,
@@ -214,7 +225,7 @@ def sessions_for(store: Path, root: Path, projects: Path, root_key: str, every: 
     for d in candidate_dirs(projects, root_key, every):
         for f in sorted(d.glob("*.jsonl")):
             sess = load_session(f, store, names)
-            if index in sess.memory_paths or _under(sess.cwd, root) or sess.reads or sess.writes:
+            if any(same_path(p, index) for p in sess.memory_paths) or _under(sess.cwd, root) or sess.reads or sess.writes:
                 out.append(sess)
     out.sort(key=lambda s: s.started or "")
     return out
